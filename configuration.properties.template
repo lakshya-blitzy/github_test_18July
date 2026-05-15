@@ -1,0 +1,71 @@
+# ============================================================
+# configuration.properties.template
+# ============================================================
+# Setup Instructions:
+#
+# 1. Copy this file to `configuration.properties`:
+#
+#        cp configuration.properties.template configuration.properties
+#
+# 2. Edit `configuration.properties` to match your local
+#    environment (browser choice, target base URL, wait timeouts).
+#
+# 3. Run the test suite:
+#
+#        mvn clean test
+#
+# The `configuration.properties` file is intentionally excluded
+# from version control via `.gitignore` (line 3), so that
+# environment-specific values are never committed to the
+# repository. This template file (with the `.template` suffix)
+# IS committed and serves as the bootstrap source.
+#
+# Any value defined below may be overridden on the Maven command
+# line via Java system properties using the `-D<key>=<value>`
+# syntax. For example:
+#
+#        mvn clean test -Dbrowser=firefox \
+#                       -Dbase_url=https://staging.testinium.com
+#
+# System property values take PRIORITY over file values when
+# both are present. This is enforced by ConfigurationReader.get(String),
+# which checks System.getProperty(key) first and only falls back
+# to the loaded properties file if the system property is null.
+# ============================================================
+
+# ------------------------------------------------------------
+# browser
+# ------------------------------------------------------------
+# Browser type used by the WebDriver session.
+# Accepted values (case-insensitive): chrome, firefox, edge
+# Consumed by: com.testinium.utilities.Driver#getDriver()
+browser=chrome
+
+# ------------------------------------------------------------
+# base_url
+# ------------------------------------------------------------
+# Base URL of the Testinium application under test.
+# This value is the starting page loaded by the Given step
+# "User is on the Testinium login page" in Login.feature.
+# Consumed by: com.testinium.step_definitions.LoginSD
+base_url=https://app.testinium.com
+
+# ------------------------------------------------------------
+# implicit_wait
+# ------------------------------------------------------------
+# Implicit wait timeout in seconds. Applied globally to the
+# WebDriver instance so that element lookups will poll the DOM
+# for up to this many seconds before failing.
+# Unit: seconds (integer)
+# Consumed by: com.testinium.utilities.Driver#getDriver()
+implicit_wait=10
+
+# ------------------------------------------------------------
+# explicit_wait
+# ------------------------------------------------------------
+# Explicit wait timeout in seconds. Used by WebDriverWait when
+# the LoginPage waits for elements to become clickable or visible.
+# Unit: seconds (integer)
+# Consumed by: com.testinium.pages.LoginPage via
+#   new WebDriverWait(Driver.getDriver(), Duration.ofSeconds(explicit_wait))
+explicit_wait=15
