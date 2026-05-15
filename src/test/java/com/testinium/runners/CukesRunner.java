@@ -22,6 +22,31 @@ import org.junit.runner.RunWith;
  * four documented report artifacts under {@code target/}.
  * </p>
  *
+ * <h2>Source-Root Location Rationale (Test Sources)</h2>
+ * <p>
+ * This class is intentionally placed under
+ * {@code src/test/java/com/testinium/runners/} rather than under
+ * {@code src/main/java/com/testinium/runners/} so that the Maven Surefire
+ * plugin (declared at {@code pom.xml:L17-L30}) discovers it at
+ * {@code mvn test} time. The Surefire plugin scans the test output
+ * directory {@code ${project.build.testOutputDirectory}} (which Maven
+ * defaults to {@code target/test-classes/}) for classes matching its
+ * {@code <includes>} filter; classes compiled from {@code src/main/java}
+ * land in {@code target/classes/} instead and are therefore invisible to
+ * Surefire's discovery scan. Placing only the runner under
+ * {@code src/test/java/} is the minimum-modification path that lets
+ * {@code mvn clean test} actually execute the Cucumber scenarios while
+ * leaving {@code pom.xml}, {@code Jenkins}, {@code .gitignore}, and
+ * {@code .gitattributes} unchanged (per the project-wide minimal-change
+ * discipline). The supporting classes ({@code LoginPage},
+ * {@code LoginSD}, {@code Driver}, {@code ConfigurationReader}) remain
+ * under {@code src/main/java/} because they are not JUnit-discovered
+ * test classes themselves &mdash; they are support code that Cucumber's
+ * {@code glue} mechanism resolves against the combined test classpath
+ * (which Maven assembles from both {@code target/classes/} and
+ * {@code target/test-classes/}).
+ * </p>
+ *
  * <h2>Contract: Surefire Runner Discovery</h2>
  * <p>
  * The class name {@code CukesRunner} matches the Surefire include pattern

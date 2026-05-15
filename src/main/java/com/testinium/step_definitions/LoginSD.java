@@ -9,6 +9,9 @@ import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import org.junit.Assert;
+import org.openqa.selenium.support.ui.WebDriverWait;
+
+import java.time.Duration;
 
 /**
  * Cucumber step-definition class for the Login feature.
@@ -206,27 +209,122 @@ public class LoginSD {
      * &mdash; positive-case assertion for {@code @UPGN-286}.
      *
      * <p>
-     * Verifies that the WebDriver has navigated away from the base login
-     * URL after submitting valid credentials. The minimal-but-meaningful
-     * check compares the current URL against the base URL read from
-     * {@link ConfigurationReader} (so that the comparison automatically
-     * honours environment overrides via {@code -Dbase_url=...}). A
-     * dashboard-specific element check is not used here because
+     * Verifies that the WebDriver has navigated to an authenticated
+     * post-login URL after submitting valid credentials. The assertion is
+     * built on top of a {@link WebDriverWait} (whose timeout is sourced
+     * from {@link ConfigurationReader#get(String) ConfigurationReader.get("explicit_wait")})
+     * so that it deterministically blocks until the dashboard navigation
+     * has occurred &mdash; preventing a brittle race where the assertion
+     * runs before the browser has finished navigating. The wait expires
+     * with a {@code TimeoutException} (and therefore a scenario failure)
+     * if the dashboard navigation never happens within the configured
+     * window, which is the correct semantic for an unsuccessful login
+     * that leaves the user stranded on the login page.
+     * </p>
+     *
+     * <h3>False-Pass Hardening</h3>
+     * <p>
+     * The previous implementation of this step compared
+     * {@code currentUrl != baseUrl} only and was susceptible to two
+     * known false-pass cases that this implementation eliminates:
+     * </p>
+     * <ol>
+     *   <li><em>Trailing-slash normalization.</em> Some browsers
+     *       normalize {@code https://app.testinium.com} to
+     *       {@code https://app.testinium.com/} immediately on load, so a
+     *       naive string inequality would report navigation success even
+     *       when the URL has not actually changed. Both the wait
+     *       predicate and the post-wait assertion strip trailing slashes
+     *       before comparison so a {@code "/" }-only change is correctly
+     *       treated as <em>no</em> navigation.</li>
+     *   <li><em>Failed-login redirect to {@code /login}.</em> A login
+     *       failure that redirects the user to an explicit
+     *       {@code /login} path (rather than the base URL) would have
+     *       false-passed the previous string inequality. The current
+     *       implementation additionally asserts that the post-wait URL
+     *       does <em>not</em> contain {@code "/login"}, catching this
+     *       redirect class outright.</li>
+     * </ol>
+     *
+     * <h3>Why Not a DOM-Element Assertion?</h3>
+     * <p>
      * {@link LoginPage} intentionally does not model dashboard elements
-     * (its scope is strictly the login form).
+     * (its scope is strictly the login form, per the minimal-change
+     * discipline that governs this delivery). A URL-contract assertion
+     * is therefore the strongest deterministic check available without
+     * introducing a dashboard-specific page object beyond the scope of
+     * the AAP. If a separate {@code DashboardPage} POM is introduced in
+     * a future delivery, this assertion can be extended to additionally
+     * wait for a known dashboard element via
+     * {@code ExpectedConditions.visibilityOf(...)}.
      * </p>
      */
     @Then("^User should see the dashboard$")
     public void user_should_see_the_dashboard() {
-        // Positive-case assertion: after a successful login, the browser
-        // should have navigated away from the login page (base_url). We
-        // assert the current URL is no longer the base login URL.
-        String currentUrl = Driver.getDriver().getCurrentUrl();
-        String baseUrl = ConfigurationReader.get("base_url");
+        // Positive-case dashboard assertion. Implementation strategy:
+        //   1. Compute a normalized form of the configured base URL (no
+        //      trailing slashes) so that a browser-side "/" append does
+        //      not appear as a navigation event.
+        //   2. Use a WebDriverWait whose timeout is sourced from the
+        //      configurable explicit_wait property to deterministically
+        //      block until the URL signals a successful login: the URL
+        //      must differ (after normalization) from the base URL AND
+        //      must not contain "/login" (which would indicate a failed
+        //      login redirected back to the login page).
+        //   3. After the wait succeeds, re-check the URL against the
+        //      same two predicates with explicit Assert calls so the
+        //      failure message identifies the offending URL precisely.
+        final String baseUrl = ConfigurationReader.get("base_url");
+        final long explicitWaitSeconds = Long.parseLong(ConfigurationReader.get("explicit_wait"));
+
+        // Normalize trailing slashes for safe string comparison. The
+        // regex strips one or more trailing slashes; baseUrl values such
+        // as "https://app.testinium.com" and "https://app.testinium.com/"
+        // both reduce to "https://app.testinium.com".
+        final String normalizedBaseUrl = baseUrl.replaceAll("/+$", "");
+
+        // Deterministic wait: block until the current URL satisfies the
+        // dashboard contract (changed from base AND not on /login). The
+        // wait fails fast with a TimeoutException after explicit_wait
+        // seconds if the dashboard navigation never occurs, which is the
+        // correct fail-fast semantic for a stalled or failed login.
+        new WebDriverWait(
+                Driver.getDriver(),
+                Duration.ofSeconds(explicitWaitSeconds).getSeconds()
+        ).until(driver -> {
+            String url = driver.getCurrentUrl();
+            if (url == null || url.isEmpty()) {
+                return false;
+            }
+            String normalizedUrl = url.replaceAll("/+$", "");
+            // Both conditions must hold:
+            //   (a) URL is not the base login URL (post-normalization)
+            //   (b) URL does not contain "/login" anywhere in its path/query
+            return !normalizedUrl.equals(normalizedBaseUrl)
+                    && !url.toLowerCase().contains("/login");
+        });
+
+        // Re-check the URL after the wait so the assertion failure
+        // message captures the exact offending URL for debugging if
+        // a regression ever defeats the wait predicate (defense in
+        // depth: the wait should already have raised TimeoutException
+        // if these assertions would fail, but explicit assertions make
+        // the contract visible in the step body itself).
+        final String currentUrl = Driver.getDriver().getCurrentUrl();
+        final String normalizedCurrentUrl = currentUrl == null
+                ? ""
+                : currentUrl.replaceAll("/+$", "");
+
         Assert.assertNotEquals(
-                "Expected to navigate away from login page after valid credentials",
-                baseUrl,
-                currentUrl
+                "Expected to navigate away from login page after valid credentials"
+                        + " (current URL was: " + currentUrl + ")",
+                normalizedBaseUrl,
+                normalizedCurrentUrl
+        );
+        Assert.assertFalse(
+                "Post-login URL should not contain '/login'"
+                        + " (current URL was: " + currentUrl + ")",
+                currentUrl != null && currentUrl.toLowerCase().contains("/login")
         );
     }
 

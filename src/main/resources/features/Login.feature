@@ -16,6 +16,19 @@ Feature: Testinium app login feature
     And User clicks the login button
     Then User should see the dashboard
 
+    @SalesManager
+    Examples: SalesManager's username and password
+      |username               |password    |
+      |salesmanager7@info.com |salesmanager|
+      |salesmanager8@info.com |salesmanager|
+      |salesmanager9@info.com |salesmanager|
+
+    @PosManager
+    Examples: PosManager's username and password
+      |username               |password  |
+      |posmanager5@info.com   |posmanager|
+      |posmanager6@info.com   |posmanager|
+
   #2-"Wrong login/password" should be displayed for invalid (valid username-invalid password and invalid username-valid password) credentials
   @UPGN-287
   Scenario Outline: Users log in with invalid email or invalid password credentials
@@ -23,6 +36,18 @@ Feature: Testinium app login feature
     And User enters "<password>" password
     And User clicks the login button
     Then User sees error message
+
+    @SalesManager
+    Examples: SalesManager invalid credential combinations
+      |username                    |password         |
+      |salesmanager7@info.com      |wrong_password   |
+      |invalid_user@info.com       |salesmanager     |
+
+    @PosManager
+    Examples: PosManager invalid credential combinations
+      |username                    |password         |
+      |posmanager5@info.com        |wrong_password   |
+      |invalid_user@info.com       |posmanager       |
 
   #3- "Please fill out this field" message should be displayed if the password or username is empty
   @UPGN-288
