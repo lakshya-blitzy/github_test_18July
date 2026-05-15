@@ -63,6 +63,19 @@ Manually :
 Fork / Clone repository from [here](https://github.com/BalamiRR/Testinium-QA/archive/main.zip) or download zip and set
 it up in your local workspace.
 
+### Configuration Setup
+
+Before running `mvn clean test` for the first time, copy the committed `configuration.properties.template` file to `configuration.properties` and set values for `browser`, `base_url`, `implicit_wait`, and `explicit_wait` appropriate to your environment:
+
+    cp configuration.properties.template configuration.properties
+
+The `configuration.properties` file is intentionally `.gitignore`-excluded so that environment-specific values are never committed to version control. Values may also be overridden on the Maven command line via system properties, for example:
+
+    mvn clean test -Dbrowser=firefox -Dbase_url=https://staging.testinium.com
+
+System property values take priority over file values when both are present.
+
+
 
 
 ### Using canned test in the project:
