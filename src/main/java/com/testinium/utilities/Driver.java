@@ -6,6 +6,8 @@ import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.edge.EdgeDriver;
 import org.openqa.selenium.firefox.FirefoxDriver;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * Thread-safe WebDriver singleton factory for the testinium-qa test harness.
  *
@@ -98,7 +100,7 @@ import org.openqa.selenium.firefox.FirefoxDriver;
  *       {@link RuntimeException} with informative messages.</li>
  * </ul>
  */
-public class Driver {
+public final class Driver {
 
     /**
      * Private constructor &mdash; prevents external instantiation.
@@ -164,19 +166,51 @@ public class Driver {
      *       ({@link ChromeDriver}, {@link FirefoxDriver}, or
      *       {@link EdgeDriver}) and stores it in the {@link ThreadLocal}
      *       pool.</li>
+     *   <li>Applies the configured {@code implicit_wait} timeout (in
+     *       seconds) to the newly-provisioned driver session so that
+     *       element lookups poll the DOM for up to the configured number
+     *       of seconds before failing.</li>
      * </ol>
      *
      * <p>
      * Subsequent calls on the same thread return the cached instance without
-     * re-running setup or re-instantiating the driver.
+     * re-running setup, re-instantiating the driver, or re-applying the
+     * implicit-wait timeout.
+     * </p>
+     *
+     * <h3>Error Handling</h3>
+     * <p>
+     * Provisioning failures (driver-binary download failures in a
+     * network-restricted environment, missing browser binary on the host,
+     * incompatible driver-server protocol versions, etc.) are caught and
+     * wrapped in a {@link RuntimeException} whose message names the
+     * configured browser and points the operator at the two most common
+     * remediation paths (browser binary availability and WebDriverManager
+     * network access). The original cause is preserved on the wrapped
+     * exception so that diagnostic context is not lost.
+     * </p>
+     *
+     * <p>
+     * The unsupported-browser default branch is kept deliberately
+     * <em>outside</em> the provisioning {@code try/catch} so that a
+     * configuration-typo message is never wrapped in a "provisioning
+     * failure" message &mdash; surfacing a clear root cause to the operator.
+     * </p>
+     *
+     * <p>
+     * Invalid {@code implicit_wait} values (non-numeric content) likewise
+     * surface as a descriptive {@link RuntimeException} naming the offending
+     * key, without echoing the rejected value to logs.
      * </p>
      *
      * @return the {@link WebDriver} for the current thread, never {@code null}
      * @throws RuntimeException if the configured browser value is not one of
      *                          {@code chrome}, {@code firefox}, or
-     *                          {@code edge}; the message includes the
-     *                          rejected value so the operator can identify
-     *                          the misconfiguration immediately
+     *                          {@code edge} (the message includes the
+     *                          rejected value); if WebDriverManager or the
+     *                          Selenium driver constructor fails during
+     *                          provisioning; or if {@code implicit_wait} is
+     *                          present but not parseable as a {@code long}
      */
     public static WebDriver getDriver() {
         if (driverPool.get() == null) {
@@ -187,23 +221,79 @@ public class Driver {
             String browser = ConfigurationReader.get("browser").toLowerCase();
             switch (browser) {
                 case "chrome":
-                    WebDriverManager.chromedriver().setup();
-                    driverPool.set(new ChromeDriver());
+                    // Wrap provisioning + instantiation so that network-
+                    // restricted environments or missing browser binaries
+                    // surface a clear, AAP-mandated error rather than a raw
+                    // WebDriverManagerException or Selenium driver-server
+                    // exception. Cause is preserved for diagnostics.
+                    try {
+                        WebDriverManager.chromedriver().setup();
+                        driverPool.set(new ChromeDriver());
+                    } catch (RuntimeException e) {
+                        throw new RuntimeException(
+                            "Unable to provision WebDriver for browser '" + browser + "'. " +
+                            "Verify browser binary availability and WebDriverManager network access.",
+                            e
+                        );
+                    }
                     break;
                 case "firefox":
-                    WebDriverManager.firefoxdriver().setup();
-                    driverPool.set(new FirefoxDriver());
+                    try {
+                        WebDriverManager.firefoxdriver().setup();
+                        driverPool.set(new FirefoxDriver());
+                    } catch (RuntimeException e) {
+                        throw new RuntimeException(
+                            "Unable to provision WebDriver for browser '" + browser + "'. " +
+                            "Verify browser binary availability and WebDriverManager network access.",
+                            e
+                        );
+                    }
                     break;
                 case "edge":
-                    WebDriverManager.edgedriver().setup();
-                    driverPool.set(new EdgeDriver());
+                    try {
+                        WebDriverManager.edgedriver().setup();
+                        driverPool.set(new EdgeDriver());
+                    } catch (RuntimeException e) {
+                        throw new RuntimeException(
+                            "Unable to provision WebDriver for browser '" + browser + "'. " +
+                            "Verify browser binary availability and WebDriverManager network access.",
+                            e
+                        );
+                    }
                     break;
                 default:
-                    // Fail fast with a clear, actionable message that names
-                    // the rejected value, rather than surfacing a downstream
-                    // NullPointerException from an absent driver binary.
+                    // Unsupported-browser handling is kept SEPARATE from the
+                    // provisioning try/catch above. Wrapping this throw
+                    // inside a provisioning-failure message would hide the
+                    // true (typo / misconfiguration) root cause from the
+                    // operator.
                     throw new RuntimeException("Unsupported browser: " + browser);
             }
+
+            // Apply the configured implicit-wait timeout to the newly
+            // provisioned WebDriver session. The value is parsed as a long
+            // (seconds). A non-numeric value surfaces as a descriptive
+            // RuntimeException naming `implicit_wait` only; the rejected
+            // value is NOT echoed to avoid leaking runtime configuration
+            // into log streams. The Selenium 3 API
+            // implicitlyWait(long, TimeUnit) is used here because the
+            // project pins selenium-java 3.141.59.
+            long implicitWaitSeconds;
+            try {
+                implicitWaitSeconds = Long.parseLong(
+                    ConfigurationReader.get("implicit_wait").trim()
+                );
+            } catch (NumberFormatException nfe) {
+                throw new RuntimeException(
+                    "Configuration key 'implicit_wait' must be a numeric value (seconds). " +
+                    "Please correct it in 'configuration.properties' or via -Dimplicit_wait=<seconds>.",
+                    nfe
+                );
+            }
+            driverPool.get()
+                .manage()
+                .timeouts()
+                .implicitlyWait(implicitWaitSeconds, TimeUnit.SECONDS);
         }
         return driverPool.get();
     }
@@ -213,12 +303,11 @@ public class Driver {
      *
      * <p>
      * If a driver instance exists in the {@link ThreadLocal} pool for the
-     * calling thread, this method performs two operations in this strict
-     * order:
+     * calling thread, this method performs two operations:
      * </p>
      * <ol>
-     *   <li>{@code driverPool.get().quit()} &mdash; closes the browser and
-     *       releases all WebDriver-server connections.</li>
+     *   <li>{@code driver.quit()} &mdash; closes the browser and releases
+     *       all WebDriver-server connections.</li>
      *   <li>{@code driverPool.remove()} &mdash; clears the per-thread
      *       reference so that the executor thread, when reused by Surefire
      *       for a subsequent scenario method, does not retain a stale
@@ -233,16 +322,28 @@ public class Driver {
      * </p>
      *
      * <p>
-     * <strong>Ordering is significant:</strong> calling {@code remove()}
-     * before {@code quit()} would discard the {@link WebDriver} reference
-     * before closing the browser, leaking the underlying browser process and
-     * its driver-server child.
+     * <strong>Exception-safe cleanup:</strong> {@code driver.quit()} can
+     * throw if the browser process has already died or the driver-server
+     * connection is broken. The {@code remove()} call is therefore placed
+     * in a {@code finally} block so that the {@link ThreadLocal} slot is
+     * always cleared, preventing stale references on long-lived Surefire
+     * executor threads even when {@code quit()} fails. Any exception thrown
+     * by {@code quit()} is allowed to propagate to the caller (typically a
+     * Cucumber {@code @After} hook) once cleanup has completed.
      * </p>
      */
     public static void quitDriver() {
-        if (driverPool.get() != null) {
-            driverPool.get().quit();
-            driverPool.remove();
+        WebDriver driver = driverPool.get();
+        if (driver != null) {
+            try {
+                driver.quit();
+            } finally {
+                // Always clear the ThreadLocal slot, even if quit() throws
+                // (e.g. due to a dead browser process or a broken driver-
+                // server connection), so that executor threads reused by
+                // Surefire do not hold a stale WebDriver reference.
+                driverPool.remove();
+            }
         }
     }
 }

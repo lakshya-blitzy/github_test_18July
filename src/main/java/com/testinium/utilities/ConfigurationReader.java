@@ -83,7 +83,7 @@ import java.util.Properties;
  *       in isolation.</li>
  * </ul>
  */
-public class ConfigurationReader {
+public final class ConfigurationReader {
 
     /**
      * In-memory cache of {@code configuration.properties}. Populated by the
@@ -135,44 +135,81 @@ public class ConfigurationReader {
      * file.
      *
      * <p>
+     * Input validation: the {@code key} argument must be non-{@code null} and
+     * must contain at least one non-whitespace character. This guard is
+     * required because {@link System#getProperty(String)} throws a raw
+     * {@link NullPointerException} when invoked with {@code null} and a raw
+     * {@link IllegalArgumentException} when invoked with an empty string.
+     * Surfacing those JDK-level exceptions to callers would obscure the
+     * actual misconfiguration; instead this method raises a
+     * {@link RuntimeException} with a clear, actionable message.
+     * </p>
+     *
+     * <p>
      * Resolution order:
      * </p>
      * <ol>
-     *   <li>{@code System.getProperty(key)} &mdash; if non-null, returned
-     *       immediately so that command-line overrides
-     *       (e.g., {@code -Dbrowser=firefox}) win.</li>
+     *   <li>{@code System.getProperty(key)} &mdash; if it returns a value
+     *       that contains at least one non-whitespace character, that value
+     *       wins. Command-line overrides such as {@code -Dbrowser=firefox}
+     *       therefore take precedence over file values.</li>
      *   <li>{@code properties.getProperty(key)} &mdash; the value loaded from
-     *       {@code configuration.properties}.</li>
+     *       {@code configuration.properties} is consulted only when the
+     *       system property is {@code null} or blank. A blank system
+     *       property is treated as "not provided" so that, e.g.,
+     *       {@code -Dbrowser=} does not silently override the file value
+     *       with an empty string.</li>
      * </ol>
      *
      * <p>
-     * If neither source provides a value, a {@link RuntimeException} is
-     * thrown whose message identifies the missing key and explains how to
-     * supply it (either by setting it in {@code configuration.properties}
-     * or by passing {@code -D<key>=<value>} on the Maven command line).
+     * If neither source provides a non-blank value, a
+     * {@link RuntimeException} is thrown whose message identifies the
+     * missing key and explains how to supply it (either by setting it in
+     * {@code configuration.properties} or by passing {@code -D<key>=<value>}
+     * on the Maven command line). The thrown message names only the missing
+     * key; it deliberately does not echo any resolved value to avoid
+     * leaking potentially sensitive runtime data into logs.
      * </p>
      *
      * @param key the configuration key to look up (e.g., {@code "browser"},
      *            {@code "base_url"}, {@code "implicit_wait"},
      *            {@code "explicit_wait"})
-     * @return the resolved value, never {@code null}
-     * @throws RuntimeException if neither the system property nor the
-     *                          properties file provides a value for
-     *                          {@code key}
+     * @return the resolved value, guaranteed to be non-{@code null} and to
+     *         contain at least one non-whitespace character
+     * @throws RuntimeException if {@code key} is {@code null} or blank, or
+     *                          if neither the system property nor the
+     *                          properties file provides a non-blank value
+     *                          for {@code key}
      */
     public static String get(String key) {
+        // Validate the key BEFORE delegating to System.getProperty(...) so
+        // that null/blank inputs produce a clear, actionable error instead
+        // of the raw NullPointerException (for null) or
+        // IllegalArgumentException (for "") that the JDK would otherwise
+        // surface.
+        if (key == null || key.trim().isEmpty()) {
+            throw new RuntimeException(
+                "Configuration key must not be null or blank. " +
+                "Provide a non-empty key such as 'browser', 'base_url', " +
+                "'implicit_wait', or 'explicit_wait'."
+            );
+        }
+        // System property takes precedence over file value, but only when
+        // it is itself non-blank: a blank system property (e.g. -Dbrowser=)
+        // is treated as "not provided" so that the file value can still
+        // satisfy the lookup.
         String systemValue = System.getProperty(key);
-        if (systemValue != null) {
+        if (systemValue != null && !systemValue.trim().isEmpty()) {
             return systemValue;
         }
         String fileValue = properties.getProperty(key);
-        if (fileValue == null) {
-            throw new RuntimeException(
-                "Required configuration key '" + key + "' is not set. " +
-                "Provide it via -D" + key + "=<value> on the command line " +
-                "or set it in 'configuration.properties'."
-            );
+        if (fileValue != null && !fileValue.trim().isEmpty()) {
+            return fileValue;
         }
-        return fileValue;
+        throw new RuntimeException(
+            "Required configuration key '" + key + "' is not set or is blank. " +
+            "Provide it via -D" + key + "=<value> on the command line " +
+            "or set it in 'configuration.properties'."
+        );
     }
 }
